@@ -1,0 +1,11 @@
+services:
+  api:
+    build: .
+    container_name: cryptovault_api
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    volumes:
+      - ./cryptovault.db:/app/cryptovault.db
+    # Let Python/Uvicorn run normally without the destructive shell override
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
