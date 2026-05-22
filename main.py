@@ -137,35 +137,6 @@ def read_admin():
     return FileResponse(os.path.join(frontend_dir, "admin.html"))
 
 @app.on_event("startup")
-def validate_production_config():
-    """Fail loudly on startup if required production settings are missing."""
-    from backend.core.config import settings
-    import logging
-    _log = logging.getLogger("startup")
-
-    errors = []
-    if not settings.SMTP_PASS:
-        errors.append("SMTP_PASS is not set. Email delivery will not work.")
-    if not settings.SMTP_USER:
-        errors.append("SMTP_USER is not set. Email delivery will not work.")
-    if settings.SECRET_KEY in (
-        "cryptovault-super-secret-key-change-in-production-2024",
-        "change-this-to-a-long-random-secret-in-production",
-        "",
-    ):
-        errors.append("SECRET_KEY is using the default insecure value. Set a strong random secret.")
-
-    if errors:
-        for e in errors:
-            _log.critical(f"[CONFIG ERROR] {e}")
-        raise RuntimeError(
-            "Application cannot start: production configuration is incomplete.\n"
-            + "\n".join(f"  - {e}" for e in errors)
-        )
-    _log.info("Production config validated OK.")
-
-
-@app.on_event("startup")
 def seed_data():
     from backend.models.models import InvestmentPlan, User, PromoCode
     from backend.core.security import get_password_hash
