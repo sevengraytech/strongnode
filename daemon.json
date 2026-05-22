@@ -1,0 +1,9 @@
+{
+  "dns": ["8.8.8.8", "1.1.1.1"],
+  "registry-mirrors": ["https://mirror.gcr.io"],
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}

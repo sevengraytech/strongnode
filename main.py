@@ -28,9 +28,13 @@ def _run_migrations():
     cur = conn.cursor()
 
     # Map of table → list of (column_name, column_definition)
+    # NOTE: SQLite does NOT support ALTER TABLE ... ADD COLUMN with UNIQUE.
+    # Uniqueness of activation_token is enforced at the application level (secrets.token_urlsafe).
     migrations = {
         "users": [
-            ("registration_completed", "BOOLEAN NOT NULL DEFAULT 0"),
+            ("registration_completed",      "BOOLEAN NOT NULL DEFAULT 0"),
+            ("activation_token",            "VARCHAR"),   # unique enforced in app, not DB
+            ("activation_token_expires_at", "DATETIME"),
         ],
     }
 
@@ -98,6 +102,11 @@ os.makedirs(uploads_dir, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 
+@app.get("/health")
+def health_check():
+    """Docker healthcheck endpoint."""
+    return {"status": "ok", "app": "StrongNode Capitals"}
+
 @app.get("/")
 def read_root():
     return FileResponse(os.path.join(frontend_dir, "index.html"))
@@ -114,6 +123,10 @@ def read_login():
 def read_reset_password():
     return FileResponse(os.path.join(frontend_dir, "reset_password.html"))
 
+@app.get("/activate")
+def read_activate():
+    return FileResponse(os.path.join(frontend_dir, "activate.html"))
+
 @app.get("/register")
 def read_register():
     return FileResponse(os.path.join(frontend_dir, "register.html"))
@@ -122,6 +135,35 @@ def read_register():
 @app.get("/admin-panel")
 def read_admin():
     return FileResponse(os.path.join(frontend_dir, "admin.html"))
+
+@app.on_event("startup")
+def validate_production_config():
+    """Fail loudly on startup if required production settings are missing."""
+    from backend.core.config import settings
+    import logging
+    _log = logging.getLogger("startup")
+
+    errors = []
+    if not settings.SMTP_PASS:
+        errors.append("SMTP_PASS is not set. Email delivery will not work.")
+    if not settings.SMTP_USER:
+        errors.append("SMTP_USER is not set. Email delivery will not work.")
+    if settings.SECRET_KEY in (
+        "cryptovault-super-secret-key-change-in-production-2024",
+        "change-this-to-a-long-random-secret-in-production",
+        "",
+    ):
+        errors.append("SECRET_KEY is using the default insecure value. Set a strong random secret.")
+
+    if errors:
+        for e in errors:
+            _log.critical(f"[CONFIG ERROR] {e}")
+        raise RuntimeError(
+            "Application cannot start: production configuration is incomplete.\n"
+            + "\n".join(f"  - {e}" for e in errors)
+        )
+    _log.info("Production config validated OK.")
+
 
 @app.on_event("startup")
 def seed_data():
