@@ -11,30 +11,32 @@ echo "║     StrongNode Capitals — Deploy Script              ║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
 
-# ── Step 1: Fix Docker DNS ────────────────────────────────────────────────────
-echo "▶ Step 1: Configuring Docker DNS..."
+# ── Step 1: Configure Docker DNS + mirror ────────────────────────────────────
+# daemon.json sets DNS (8.8.8.8 / 1.1.1.1) and registry mirror (mirror.gcr.io)
+# The mirror is required on servers where Docker Hub is not directly reachable.
+echo "▶ Step 1: Configuring Docker daemon (DNS + registry mirror)..."
 sudo cp daemon.json /etc/docker/daemon.json
 sudo systemctl restart docker
-echo "  ✅ Docker DNS set to 8.8.8.8 and 1.1.1.1"
+echo "  ✅ Docker daemon configured"
 sleep 2
 
 # ── Step 2: Test internet connectivity ───────────────────────────────────────
 echo ""
-echo "▶ Step 2: Testing connectivity to Docker Hub..."
-if curl -s --max-time 10 https://auth.docker.io > /dev/null; then
-    echo "  ✅ Docker Hub reachable"
+echo "▶ Step 2: Testing internet connectivity..."
+if curl -s --max-time 10 https://mirror.gcr.io > /dev/null 2>&1; then
+    echo "  ✅ Registry mirror reachable (mirror.gcr.io)"
+elif curl -s --max-time 10 https://auth.docker.io > /dev/null 2>&1; then
+    echo "  ✅ Docker Hub reachable directly"
 else
-    echo "  ⚠️  Docker Hub still unreachable — trying mirror only"
+    echo "  ❌ Neither Docker Hub nor the registry mirror is reachable."
+    echo "     Check your server's internet/firewall settings and retry."
+    exit 1
 fi
 
 # ── Step 3: Pull base image ───────────────────────────────────────────────────
 echo ""
 echo "▶ Step 3: Pulling Python base image..."
-docker pull python:3.11-slim || {
-    echo "  ⚠️  Direct pull failed — trying Google mirror..."
-    docker pull mirror.gcr.io/library/python:3.11-slim
-    docker tag mirror.gcr.io/library/python:3.11-slim python:3.11-slim
-}
+docker pull python:3.11-slim
 echo "  ✅ Base image ready"
 
 # ── Step 4: Build & start app ─────────────────────────────────────────────────
@@ -50,8 +52,8 @@ echo ""
 echo "▶ Step 5: Waiting for app to be healthy..."
 sleep 5
 for i in {1..10}; do
-    if curl -sf http://localhost:9000/health > /dev/null 2>&1; then
-        echo "  ✅ App is healthy at http://localhost:9000"
+    if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
+        echo "  ✅ App is healthy at http://localhost:8081"
         break
     fi
     echo "  ⏳ Waiting... ($i/10)"
@@ -62,7 +64,7 @@ echo ""
 echo "╔══════════════════════════════════════════════════════╗"
 echo "║  ✅ Deploy complete!                                  ║"
 echo "║                                                       ║"
-echo "║  App running at: http://localhost:9000               ║"
+echo "║  App running at: http://localhost:8081               ║"
 echo "║  View logs:      docker compose logs -f              ║"
 echo "║  Stop app:       docker compose down                 ║"
 echo "╚══════════════════════════════════════════════════════╝"

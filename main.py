@@ -4,7 +4,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from backend.core.database import engine, SessionLocal, Base
 from backend.models import models
-from backend.routers import auth, user, transactions, investments, profits, loans, admin, claimback, password_reset, chatbot
+from backend.routers import auth, user, transactions, investments, profits, loans, admin, claimback, password_reset, chatbot, visits
+from backend.routers.referrals import router as referrals_router
+
 
 import os
 import random
@@ -18,23 +20,24 @@ Base.metadata.create_all(bind=engine)
 # ── Auto-migrate: add any columns the model defines that the DB doesn't yet have ──
 def _run_migrations():
     """
-    SQLite doesn't support ALTER TABLE ... ADD COLUMN IF NOT EXISTS, so we inspect
-    the live schema and add any columns that the ORM model defines but the DB lacks.
-    This is safe to run on every startup — it skips columns that already exist.
+    Adds missing columns and tables on every startup.
+    Safe to run repeatedly — skips anything that already exists.
     """
     import sqlite3 as _sqlite3
-    db_path = engine.url.database  # e.g. "./cryptovault.db"
+    db_path = engine.url.database
     conn = _sqlite3.connect(db_path)
     cur = conn.cursor()
 
-    # Map of table → list of (column_name, column_definition)
-    # NOTE: SQLite does NOT support ALTER TABLE ... ADD COLUMN with UNIQUE.
-    # Uniqueness of activation_token is enforced at the application level (secrets.token_urlsafe).
+    # ── Column migrations ─────────────────────────────────────────────────
     migrations = {
         "users": [
             ("registration_completed",      "BOOLEAN NOT NULL DEFAULT 0"),
-            ("activation_token",            "VARCHAR"),   # unique enforced in app, not DB
+            ("activation_token",            "VARCHAR"),
             ("activation_token_expires_at", "DATETIME"),
+
+            # Referral system columns (needed by current User model)
+            ("referral_code",              "VARCHAR"),
+            ("referrer_user_id",          "INTEGER"),
         ],
     }
 
@@ -46,12 +49,42 @@ def _run_migrations():
                 cur.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}")
                 print(f"✅ Migration: added {table}.{col_name}")
 
+    # ── Table creation (for tables not caught by create_all on existing DBs) ─
+    cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='password_reset_tokens'"
+    )
+    if not cur.fetchone():
+        cur.execute("""
+            CREATE TABLE password_reset_tokens (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL,
+                email      VARCHAR NOT NULL,
+                token_hash VARCHAR NOT NULL,
+                expires_at DATETIME NOT NULL,
+                used       BOOLEAN DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("CREATE INDEX idx_prt_token_hash ON password_reset_tokens(token_hash)")
+        cur.execute("CREATE INDEX idx_prt_user_id    ON password_reset_tokens(user_id)")
+        print("✅ Migration: created password_reset_tokens table")
+
     conn.commit()
     conn.close()
 
 _run_migrations()
 
 app = FastAPI(title="StrongNodeCapital API", version="2.0.0", docs_url="/docs")
+
+from backend.core.visitor_middleware import VisitorLoggingMiddleware, start_visitor_log_purge_daemon
+
+
+# Capture visitor IPs + basic metadata for admin analytics
+app.add_middleware(VisitorLoggingMiddleware, enabled=True)
+
+# Periodically purge visitor logs older than retention window
+start_visitor_log_purge_daemon()
+
 
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -93,6 +126,8 @@ app.include_router(admin.router)
 app.include_router(claimback.router)
 app.include_router(password_reset.router)
 app.include_router(chatbot.router)
+app.include_router(referrals_router)
+app.include_router(visits.router)
 
 
 frontend_dir = os.path.join(os.path.dirname(__file__), "frontend")
@@ -137,8 +172,37 @@ def read_admin():
     return FileResponse(os.path.join(frontend_dir, "admin.html"))
 
 @app.on_event("startup")
+def validate_production_config():
+    """Fail loudly on startup if required production settings are missing."""
+    from backend.core.config import settings
+    import logging
+    _log = logging.getLogger("startup")
+
+    errors = []
+    if not settings.SMTP_PASS:
+        errors.append("SMTP_PASS is not set. Email delivery will not work.")
+    if not settings.SMTP_USER:
+        errors.append("SMTP_USER is not set. Email delivery will not work.")
+    if settings.SECRET_KEY in (
+        "cryptovault-super-secret-key-change-in-production-2024",
+        "change-this-to-a-long-random-secret-in-production",
+        "",
+    ):
+        errors.append("SECRET_KEY is using the default insecure value. Set a strong random secret.")
+
+    if errors:
+        for e in errors:
+            _log.critical(f"[CONFIG ERROR] {e}")
+        raise RuntimeError(
+            "Application cannot start: production configuration is incomplete.\n"
+            + "\n".join(f"  - {e}" for e in errors)
+        )
+    _log.info("Production config validated OK.")
+
+
+@app.on_event("startup")
 def seed_data():
-    from backend.models.models import InvestmentPlan, User, PromoCode
+    from backend.models.models import InvestmentPlan, User, PromoCode, AdminSettings
     from backend.core.security import get_password_hash
     db = SessionLocal()
     try:
@@ -183,7 +247,7 @@ def seed_data():
             )
             db.add(admin_user)
 
-        # Force admin flags and password on every startup
+# Force admin flags and password on every startup
         admin_user.is_admin = True
         admin_user.is_active = True
         admin_user.email_verified = True
@@ -200,6 +264,12 @@ def seed_data():
         admin_user.city = admin_user.city or "N/A"
         admin_user.state = admin_user.state or "N/A"
         admin_user.wallet_address = admin_user.wallet_address or ("0x" + sec.token_hex(20))
+        admin_user.referral_code = admin_user.referral_code or ("REF-" + sec.token_hex(6).upper())
+
+        # Seed default referral percentage setting
+        referral_setting = db.query(AdminSettings).filter(AdminSettings.key == "referral_percentage").first()
+        if not referral_setting:
+            db.add(AdminSettings(key="referral_percentage", value="5.0"))
 
         db.commit()
         print("✅ Admin ensured & forced login: strongnodecapital@mailfence.com / admin123")

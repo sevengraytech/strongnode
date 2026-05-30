@@ -2,35 +2,35 @@ services:
   api:
     build:
       context: .
-      dockerfile: Dockerfile
-    image: sttrongnodecapitals:latest
+    image: sttrongnodecapitals:local
     container_name: cryptovault_api
     ports:
-      - "9000:9000"
+      - "8081:8080"
     restart: unless-stopped
     dns:
       - 8.8.8.8
       - 1.1.1.1
+
     environment:
       # ── App ───────────────────────────────────────────────────────────
       - APP_BASE_URL=https://strongnodecapitals.com
       # ── Stalwart SMTP (fill these in) ─────────────────────────────────
-      - SMTP_HOST=mail.strongnodecapitals.com
-      - SMTP_PORT=587
+      - SMTP_HOST=smtp.zoho.com
+      - SMTP_PORT=465
       - SMTP_USER=noreply@strongnodecapitals.com
-      - SMTP_PASS=Indian@12
-      - SMTP_FROM=oreply@strongnodecapitals.com
-      - SMTP_TLS=true
+      - SMTP_PASS=Fgu9Wmzjzmc2 # REQUIRED: set your Stalwart mailbox password here
+      - SMTP_FROM=StrongNode capitals <noreply@strongnodecapitals.com>
+      - SMTP_TLS=false
       # ── Security ──────────────────────────────────────────────────────
-      - SECRET_KEY=3fd770fbe14b2d2729064e7a325baec60c16be696e84ed2d64c4cd309d1eb365
-
+      - SECRET_KEY=abcaee9f3dc8f43a3a558b2c937ca9301d2cb68e6199128d24efc98ee8e4544e
+       # REQUIRED: set a long random secret before deploying
     volumes:
       - ./cryptovault.db:/app/cryptovault.db
       - ./frontend/uploads:/app/frontend/uploads
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
-    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9000"]
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
